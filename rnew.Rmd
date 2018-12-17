@@ -1,0 +1,382 @@
+---
+title: "Untitled"
+author: "Mansi Gupta"
+date: "2 November 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Loading the data
+```{r,warning=FALSE}
+setwd("D:/userdata/mansgupt/My Documents/Coursera/Capstone")
+blogs<-readLines("en_US.blogs.txt")
+news<-readLines("en_US.news.txt")
+twitter<-readLines("en_US.twitter.txt")
+```
+
+##Sample data
+
+```{r sample}
+set.seed(2018)
+twitter.sample <- sample(twitter, 2000, replace = FALSE)
+news.sample    <- sample(news, 5000, replace = FALSE)
+blog.sample    <- sample(blogs, 10000, replace = FALSE)
+corpus         <- c(twitter.sample, news.sample, blog.sample)
+
+```
+
+##Cleaning the text input
+
+```{r}
+# to deal with smiley and stuff like that
+corpus <- iconv(corpus, "UTF-8", "ASCII", "?")
+
+# split into single sentences (as good as possible)
+corpus <- unlist(strsplit(corpus , "[\\.\\!\\?\\:]+"))
+
+# number of sentences
+length(corpus)
+```
+
+```{r clean}
+library(stringr)
+library(tm)
+custom.words<-c(stopwords("en"),"said","will","s")
+clean.text <- function(string){
+                # lower case
+                string <- tolower(string)
+                string<-removeWords(string,custom.words)
+                # e-mail
+                string <- str_replace_all(string, "\\S+@\\S+", "") 
+                # URLs
+                string <- str_replace_all(string, "http[[:alnum:]]*", "")
+                # hashtags
+                string <- str_replace_all(string, "#[[:alnum:]]*", "")
+                string <- str_replace_all(string, "# [[:alnum:]]*", "")
+                # @
+                string <- str_replace_all(string, "@[[:alnum:]]*", "")
+                string <- str_replace_all(string, "@ [[:alnum:]]*", "")
+                # twitter language
+                string <- str_replace_all(string, "RT", "")
+                string <- str_replace_all(string, "PM", "")
+                string <- str_replace_all(string, "rt", "")
+                string <- str_replace_all(string, "pm", "")
+                # apostrophes 
+                string <- str_replace_all(string, "'ll", " will")
+                string <- str_replace_all(string, "'d", " would")
+                string <- str_replace_all(string, "can't", "cannot")
+                string <- str_replace_all(string, "n't", " not")
+                string <- str_replace_all(string, "'re", " are")
+                string <- str_replace_all(string, "'m", " am")
+                string <- str_replace_all(string, "n'", " and")
+                #'s-genitive
+                string <- str_replace_all(string, "'s", " ")
+                string <- str_replace_all(string, "s'", " ")
+                # everything that is not number,letter, whitespace or '
+                string <- str_replace_all(string, "[^[:alnum:]]", " ")
+                # digits
+                string <- str_replace_all(string, "[:digit:]", "")
+                # more then one whitespace
+                string <- str_replace_all(string, "\\s+", " ")
+                # trim whitespace
+                string <- str_trim(string, side = c("both"))
+                # deal with "don t und dont"
+                string <- str_replace_all(string, "don t", "do not")
+                string <- str_replace_all(string, "dont", "do not")
+                # deal with "u s for usa"
+                string <- str_replace_all(string, "u s", "usa")
+               
+                
+return(string)
+}
+cleancorpus<-clean.text(corpus)
+```
+
+
+Split the data into test and training set
+
+```{r}
+set.seed(200)
+n<-sample.int(length(cleancorpus),size=length(cleancorpus)*0.1,replace=FALSE)
+training<-cleancorpus[-n]
+testing<-cleancorpus[n]
+```
+
+```{r}
+install.packages('tau')
+```
+
+                
+
+Tokenisation using tau 
+```{r}
+library(tau)
+unigram_tau  <- textcnt(training, n = 1L, method = "string", split = " ")
+bigram_tau   <- textcnt(training, n = 2L, method = "string", split = " ")
+trigram_tau  <- textcnt(training, n = 3L, method = "string", split = " ")
+fourgram_tau <- textcnt(training, n = 4L, method = "string", split = " ")
+```
+
+```{r}
+unigram<-data.frame(counts = unclass(unigram_tau), size = nchar(names(unigram_tau)))
+unigram$n.gram<-rownames(unigram)
+rownames(unigram)<-NULL
+head(unigram)
+bigram<-data.frame(counts = unclass(bigram_tau), size = nchar(names(bigram_tau)))
+bigram$n.gram<-rownames(bigram)
+rownames(bigram)<-NULL
+head(bigram)
+trigram<-data.frame(counts = unclass(trigram_tau), size = nchar(names(trigram_tau)))
+trigram$n.gram<-rownames(trigram)
+rownames(trigram)<-NULL
+head(unigram)
+fourgram<-data.frame(counts = unclass(fourgram_tau), size = nchar(names(fourgram_tau)))
+fourgram$n.gram<-rownames(fourgram)
+rownames(fourgram)<-NULL
+head(fourgram)
+
+```
+
+```{r}
+library(dplyr)
+unigram <- filter(unigram, counts > 1) %>%
+                     select(n.gram, counts)
+
+bigram <- filter(bigram, counts > 1) %>%
+                     select(n.gram, counts)
+trigram <- filter(trigram, counts > 1) %>%
+                     select(n.gram, counts)
+fourgram<-filter(fourgram,counts >1) %>%
+select(n.gram,counts)
+```
+
+
+function to get n last words from a string
+```{r }
+library(stringr)
+getLastWords <- function(string, words) {
+    pattern <- paste("[a-z']+( [a-z']+){", words - 1, "}$", sep="")
+    return(substring(string, str_locate(string, pattern)[,1]))
+}
+```
+
+Building the algorithm using KAtz back off model
+
+```{r}
+#pred.word3 is for cases when input is 3 words
+
+pred.word3<-function(input.sentence)
+{
+
+  #chose the last three words from input string as an input for fourgram and repeat same steps for trigram and twogram
+   lastword3<-getLastWords(input.sentence,3)
+   lastword2<-getLastWords(lastword3,2)
+   lastword1<-getLastWords(lastword2,1)
+
+    ##Starting the predictions from highest(fourgram) table
+   #Lets filter all the four grams starting with the three input words
+   pred.four<-fourgram %>%
+   filter(grepl(paste0("^", lastword3," "), n.gram)) %>% 
+   mutate(predictedword=getLastWords(n.gram,1)) %>%
+   mutate(probability=counts/trigram$counts[lastword3==trigram$n.gram]) %>%
+   arrange(desc(probability)) %>%
+  select(predictedword,probability) 
+
+     ##Repeat the same for three gram table, and the back off factor=0.4 
+     
+pred.tri<-trigram %>%
+filter(grepl(paste0("^", lastword2," "), n.gram)) %>%  
+mutate(predictedword=getLastWords(n.gram,1)) %>%
+ mutate(probability=counts*0.4/bigram$counts[bigram$n.gram==lastword2]) %>% 
+ arrange(desc(probability)) %>%
+  select(predictedword,probability)
+
+##Repeat the same for two gram table with the back off factor =0.4
+
+pred.two<- bigram %>%
+ filter(grepl(paste0("^", lastword1," "), n.gram)) %>%  
+mutate(predictedword=getLastWords(n.gram,1)) %>%
+mutate(probability=counts*0.4*0.4/unigram$counts[unigram$n.gram==lastword1]) %>% 
+ arrange(desc(probability)) %>%
+  select(predictedword,probability)
+
+##Repeat the same for one gram
+pred.one<-unigram %>%
+mutate(predictedword=n.gram) %>%
+mutate(probability=counts*0.4*0.4*0.4/sum(unigram$counts)) %>%
+  arrange(desc(probability)) %>%
+select(predictedword,probability)
+
+##Combine th results in a dataframe and arrange in the descending order
+result<-rbind(pred.tri,pred.two,pred.one) %>%
+  arrange(desc(probability)) %>%
+top_n(3)
+
+return(result)
+}
+```
+
+
+```{r pred2}
+
+##pred.word2 when the input is two words
+
+pred.word2<-function(input.sentence)
+{
+
+  #chose the last two words from input string as an input for trigram and repeat same steps for bigram and unigram
+   lastword2<-getLastWords(input.sentence,2)
+   lastword1<-getLastWords(lastword2,1)
+  
+
+    ##Starting the predictions from trigram table
+   #Lets filter all the tri grams starting with the two input words
+   pred.tri<-trigram %>%
+   filter(grepl(paste0("^", lastword2," "), n.gram)) %>% 
+   mutate(predictedword=getLastWords(n.gram,1)) %>%
+   mutate(probability=counts/bigram$counts[lastword2==bigram$n.gram]) %>%
+   arrange(desc(probability)) %>%
+  select(predictedword,probability) 
+
+     ##Repeat the same for two gram table, and the back off factor=0.4 
+     
+pred.two<-bigram %>%
+filter(grepl(paste0("^", lastword1," "), n.gram)) %>%  
+mutate(predictedword=getLastWords(n.gram,1)) %>%
+ mutate(probability=counts*0.4/unigram$counts[unigram$n.gram==lastword1]) %>% 
+ arrange(desc(probability)) %>%
+  select(predictedword,probability)
+
+
+
+##Repeat the same for one gram
+pred.one<-unigram %>%
+mutate(predictedword=n.gram) %>%
+mutate(probability=counts*0.4*0.4/sum(unigram$counts)) %>%
+  arrange(desc(probability)) %>%
+select(predictedword,probability)
+
+##Combine th results in a dataframe and arrange in the descending order
+result<-rbind(pred.tri,pred.two,pred.one) %>%
+  arrange(desc(probability)) %>%
+top_n(3)
+
+return(result)
+}
+```
+
+```{r}
+
+
+##pred.word1 when the input is one word
+
+pred.word1<-function(input.sentence)
+{
+
+  #chose the last two words from input string as an input for trigram and repeat same steps for bigram and unigram
+   lastword1<-getLastWords(input.sentence,1)
+   
+  
+
+    ##Starting the predictions from bigram table
+   #Lets filter all the bigrams starting with the  input word
+   pred.two<-bigram %>%
+   filter(grepl(paste0("^", lastword1," "), n.gram)) %>% 
+   mutate(predictedword=getLastWords(n.gram,1)) %>%
+   mutate(probability=counts/unigram$counts[lastword1==unigram$n.gram]) %>%
+   arrange(desc(probability)) %>%
+  select(predictedword,probability) 
+
+     
+
+
+##Repeat the same for one gram with a back off factor of 0.4
+pred.one<-unigram %>%
+mutate(predictedword=n.gram) %>%
+mutate(probability=counts*0.4/sum(unigram$counts)) %>%
+  arrange(desc(probability)) %>%
+select(predictedword,probability)
+
+##Combine th results in a dataframe and arrange in the descending order
+result<-rbind(pred.two,pred.one) %>%
+  arrange(desc(probability)) %>%
+top_n(3)
+
+return(result)
+}
+```
+
+A function that combines all the pred.word funcions together.
+
+```{r}
+
+predictword<-function(input)
+{
+  cleaninput<-clean.text(input)
+  length<-length(unlist(strsplit(cleaninput, " ")))
+  if(length>=3)
+  {output<-pred.word3(input)
+  } else if(length==2)
+  {output<-pred.word2(input)
+  }
+  else
+    output<-pred.word1(input)
+  
+  return(output)
+  
+}
+
+```
+
+ ##Testing the model on testdataset
+
+```{r}
+set.seed(2017)
+##Sample 1000 sentences from test data set
+testing.set<-sample(testing,1000,replace=FALSE)
+
+##deleting the last word to get the input sentence
+input <- lapply(testing.set, function(x) gsub("\\s*\\w*$", "", x))
+
+##Saving the last true word
+lastword<-lapply(testing.set, function(x) getLastWords(x, 1))
+
+###Apply the predict function to input only
+word.predict<-lapply(input , function(x) predictword(x)[,1])
+
+##Create a data frame that compares the predicted and actual word
+accuracy.df <- as.data.frame(cbind(lastword, word.predict)) %>%
+    mutate(lastword = as.character(lastword)) %>%
+    mutate(word.predict = as.character(word.predict)) %>%
+    mutate(pass = ifelse(str_detect(word.predict,lastword), 1, 0))
+head(accuracy.df)
+```
+
+```{r}
+##Percentage accuracy
+
+accuracy.df$pass<-as.integer(accuracy.df$pass)
+accuracy.df$pass=na.omit(accuracy.df$pass)
+d<-sum(accuracy.df$pass)
+percentageaccuracy <- (d/1000)*100
+percentageaccuracy
+
+
+
+
+
+
+```
+therefroe the model is 6.3% accurate . Low accuracy is due to memory constraints of the system.A very small amount of data has been used for testing and training.
+
+Other otpions that would be worth looking at would be: improving the data access through indexing and using advance algorithms.
+
+
+
+
+
+
+
